@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "esnext", "module": "esnext", "moduleResolution": "bundler",
+    "lib": ["esnext"], "types": ["@cloudflare/workers-types", "./worker-configuration.d.ts"],
+    "strict": true, "noEmit": true, "skipLibCheck": true
+  },
+  "include": ["worker.ts", "relay.ts", "worker-configuration.d.ts"]
+}

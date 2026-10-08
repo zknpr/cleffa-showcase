@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>cleffa demo</title>
+  <meta name="description" content="Explore Clef vision models with live camera, video, image batches and typed answers. Connect your own Cleffa, SystemOne or Cloudflare API.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <!-- The mark: the c of cleffa drawn as a probability donut (a 270-degree ring in three
+         segments, 60/28/12 percent, fading with probability) around a lens. -->
+    <symbol id="mark" viewBox="0 0 32 32">
+      <path d="M23.071 8.929A10 10 0 0 0 6.241 18.181" fill="none" stroke="#f6821f" stroke-width="5"/>
+      <path d="M6.908 20.163A10 10 0 0 0 16.607 25.982" fill="none" stroke="#f6821f" stroke-opacity=".6" stroke-width="5"/>
+      <path d="M18.669 25.637A10 10 0 0 0 23.071 23.071" fill="none" stroke="#f6821f" stroke-opacity=".3" stroke-width="5"/>
+      <circle cx="16" cy="16" r="2.6" fill="#f6821f"/>
+    </symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13.5" height="12" rx="2.5"/><path d="M16 10.2l5.5-3.2v10l-5.5-3.2z"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 4.5v15M16.5 4.5v15M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></symbol>
+    <symbol id="i-ask" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4A1.5 1.5 0 0 1 4 14.5z"/><path d="M9.8 8.2a2.2 2.2 0 1 1 3 2c-.6.3-.8.6-.8 1.2M12 13.6v.1"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5.5v13M15.5 5.5v13" stroke-width="3"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-shutter" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 7.5L4 12l4.5 4.5M15.5 7.5L20 12l-4.5 4.5M13.5 5l-3 14"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4M7.5 8.5L12 4l4.5 4.5M4.5 15v3.5A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5V15"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11.5M7.5 11L12 15.5l4.5-4.5M4.5 20h15"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2H9l2 2h7.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5L6 20"/></symbol>
+    <symbol id="i-tokens" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9.33h16M4 14.66h16M9.33 4v16M14.66 4v16"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-chev-l" viewBox="0 0 24 24"><path d="M14.5 6L8.5 12l6 6"/></symbol>
+    <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+  </svg>
+
+  <header class="top">
+    <a class="brand" href="#live" aria-label="cleffa, live mode">
+      <svg class="mark" aria-hidden="true"><use href="#mark"/></svg>
+      <span class="word">cleffa</span>
+    </a>
+    <nav class="tabs" role="tablist" aria-label="Mode">
+      <button class="tab" role="tab" id="tab-live" data-mode="live" aria-controls="pane-live" aria-selected="true"><svg class="i" aria-hidden="true"><use href="#i-camera"/></svg><span class="label">Live</span><i class="badge" hidden></i></button>
+      <button class="tab" role="tab" id="tab-video" data-mode="video" aria-controls="pane-video" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-film"/></svg><span class="label">Video</span><i class="badge" hidden></i></button>
+      <button class="tab" role="tab" id="tab-batch" data-mode="batch" aria-controls="pane-batch" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-grid"/></svg><span class="label">Batch</span><i class="badge" hidden></i></button>
+      <button class="tab" role="tab" id="tab-ask" data-mode="ask" aria-controls="pane-ask" aria-selected="false"><svg class="i" aria-hidden="true"><use href="#i-ask"/></svg><span class="label">Ask</span><i class="badge" hidden></i></button>
+      <span class="tab-ink" aria-hidden="true"></span>
+    </nav>
+    <div class="top-right">
+      <button id="engine-pill" class="pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="engine-pop" title="Backend and model"><i class="dot"></i><span id="engine-name">connecting…</span><span id="engine-ms" class="pill-ms"></span></button>
+      <button id="open-inspector" class="icon-btn" title="Last request and response" aria-label="Show the last request and response"><svg class="i" aria-hidden="true"><use href="#i-code"/></svg></button>
+      <a class="icon-btn" href="https://github.com/zknpr/cleffa" target="_blank" rel="noopener noreferrer" title="The cleffa engine" aria-label="The cleffa engine repository"><svg class="i" aria-hidden="true"><use href="#i-external"/></svg></a>
+    </div>
+    <div id="engine-pop" class="popover" role="dialog" aria-label="Connection" hidden>
+      <div class="seg fill" role="radiogroup" aria-label="Service">
+        <button type="button" role="radio" data-backend="local" aria-checked="true">Local cleffa</button>
+        <button type="button" role="radio" data-backend="remote" aria-checked="false">SystemOne API</button>
+        <button type="button" role="radio" data-backend="hosted" aria-checked="false">Cloudflare</button>
+      </div>
+      <div id="connection-local" class="connection-fields">
+        <label>Companion URL<input id="connection-local-url" type="url" value="http://127.0.0.1:8790" spellcheck="false" autocomplete="off"></label>
+        <p class="pop-note" id="connection-origin-note">Start it with <code id="connection-command">bun run start --allow-origin https://cleffa.zknpr.xyz</code> <a href="https://github.com/zknpr/cleffa-showcase#run" target="_blank" rel="noopener noreferrer">Setup guide</a></p>
+      </div>
+      <div id="connection-remote" class="connection-fields" hidden>
+        <label>Endpoint<input id="connection-remote-url" type="url" placeholder="https://your-api.example/v1/systemone" spellcheck="false" autocomplete="off"></label>
+        <label><span>Bearer token <small>optional</small></span><input id="connection-remote-token" type="password" autocomplete="off" spellcheck="false"></label>
+        <p class="pop-note">The server must allow this site through CORS. The token stays in this tab.</p>
+      </div>
+      <div id="connection-hosted" class="connection-fields" hidden>
+        <label>Account ID<input id="connection-account" type="text" maxlength="32" autocomplete="off" spellcheck="false"></label>
+        <label><span>API token <small>with Workers AI access</small></span><input id="connection-cloudflare-token" type="password" autocomplete="off" spellcheck="false"></label>
+        <p class="pop-note">Billed to your account. Token and images pass through this site's relay and are not stored. No video.</p>
+        <p id="connection-proxy-note" class="pop-note" hidden>Leave both empty to use the companion's credentials.</p>
+      </div>
+      <div class="pop-row">
+        <span class="pop-k">Model</span>
+        <div class="seg" role="radiogroup" aria-label="Model">
+          <button type="button" role="radio" data-model="clef-flash" aria-checked="true">clef-flash</button>
+          <button type="button" role="radio" data-model="clef" aria-checked="false">clef</button>
+        </div>
+      </div>
+      <div class="row"><button id="connection-connect" class="btn primary">Connect</button><button id="connection-disconnect" class="btn ghost">Disconnect</button></div>
+      <p id="engine-detail" class="pop-note" role="status"></p>
+    </div>
+  </header>
+
+  <main>
+    <!-- Live: one frame in flight, closed loop -->
+    <section id="pane-live" class="pane" role="tabpanel" aria-labelledby="tab-live">
+      <div class="workspace">
+        <div class="main-col">
+          <div class="rig">
+            <div class="stage" id="live-stage">
+              <video id="cam" autoplay playsinline muted></video>
+              <canvas id="live-grid" class="grid-overlay" hidden></canvas>
+              <div class="hud hud-tl"><span class="hud-chip"><i class="rec-dot"></i><span id="live-hud-state">idle</span></span></div>
+              <div class="hud hud-tr"><span class="hud-chip accent" id="live-hud-ms" hidden></span></div>
+              <div class="hud hud-bl"><span class="hud-chip" id="live-hud-geom" hidden></span></div>
+              <div class="empty" id="live-empty">
+                <div class="hero">
+                  <h1>Typed decisions about what your camera sees.</h1>
+                  <div class="cta">
+                    <button class="btn primary lg" data-action="cam-toggle"><svg class="i" aria-hidden="true"><use href="#i-camera"/></svg>Start camera</button>
+                    <button class="btn lg needs-engine" data-action="connect">Connect an engine</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="dock">
+              <button class="btn when-loaded" data-action="cam-toggle" id="live-cam"><svg class="i" aria-hidden="true"><use href="#i-camera"/></svg><span>Start camera</span></button>
+              <button class="btn primary" id="live-run" disabled aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg><span>Run</span></button>
+              <button class="btn" id="live-once" disabled title="Send a single frame"><svg class="i" aria-hidden="true"><use href="#i-shutter"/></svg>Frame</button>
+              <span class="sep"></span>
+              <label class="ctl wide">
+                <span class="ctl-top"><span>Frame size</span><span><output id="live-side-out">336 px</output> <span class="ctl-cost" id="live-cost">—</span></span></span>
+                <input type="range" id="live-side" min="128" max="1024" step="16" value="336">
+              </label>
+              <label class="ctl narrow" title="JPEG quality of each frame, encoded in the browser">
+                <span class="ctl-top"><span>Quality</span><output id="live-q-out">0.85</output></span>
+                <input type="range" id="live-quality" min="0.5" max="0.95" step="0.05" value="0.85">
+              </label>
+              <span class="grow"></span>
+              <select id="live-device" aria-label="Camera" hidden></select>
+              <button class="btn ghost when-loaded" id="live-grid-toggle" aria-pressed="false" title="Overlay the image-token grid: one cell per token the model reads"><svg class="i" aria-hidden="true"><use href="#i-tokens"/></svg>Tokens</button>
+            </div>
+          </div>
+          <p class="error" id="live-error" role="alert"></p>
+
+          <div class="telemetry" id="live-telemetry" hidden>
+            <div class="metrics">
+              <div class="metric hero-m" title="Companion or relay time to the inference service, including network time"><div class="k"><i class="key engine"></i>Engine</div><div class="v" id="live-m-engine">—</div></div>
+              <div class="metric" title="Adds the browser's capture, encode and upload"><div class="k"><i class="key rt"></i>Round trip</div><div class="v" id="live-m-rt">—</div></div>
+              <div class="metric"><div class="k">Median / p90</div><div class="v" id="live-m-med">—</div></div>
+              <div class="metric"><div class="k">Frames/s</div><div class="v" id="live-m-fps">—</div></div>
+              <div class="metric"><div class="k">Tokens</div><div class="v" id="live-m-tok">—</div></div>
+            </div>
+            <canvas id="live-spark" class="spark" aria-label="Latency of recent frames"></canvas>
+          </div>
+
+          <section class="panel">
+            <h2 class="panel-title">Last 60 seconds</h2>
+            <div id="live-score"></div>
+          </section>
+        </div>
+
+        <aside class="side-col" aria-label="Live answers">
+          <div class="side-head">
+            <h2 class="panel-title">Decisions</h2>
+            <span class="spacer"></span>
+            <button class="btn sm ghost" data-action="edit"><svg class="i" aria-hidden="true"><use href="#i-sliders"/></svg>Edit questions</button>
+          </div>
+          <div id="live-decisions" class="decisions-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Video: a clip in windows, each window one request with real video input -->
+    <section id="pane-video" class="pane" role="tabpanel" aria-labelledby="tab-video" hidden>
+      <div class="workspace">
+        <div class="main-col">
+          <div class="rig">
+            <div class="stage" id="video-stage">
+              <video id="vid" controls playsinline muted preload="auto"></video>
+              <canvas id="video-grid" class="grid-overlay" hidden></canvas>
+              <div class="hud hud-tl"><span class="hud-chip" id="video-hud-geom" hidden></span></div>
+              <div class="hud hud-tr"><span class="hud-chip" id="video-hud-win" hidden></span><span class="hud-chip accent" id="video-hud-ms" hidden></span></div>
+              <div class="empty" id="video-empty">
+                <div class="hero">
+                  <h1>Decisions along a video, from frames read together.</h1>
+                  <div class="cta">
+                    <label class="btn primary lg"><svg class="i" aria-hidden="true"><use href="#i-film"/></svg>Choose a video<input type="file" id="video-file" accept="video/*"></label>
+                  </div>
+                  <p class="fine">or drop a clip here</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="dock">
+              <button class="btn primary" id="video-run" disabled aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-bolt"/></svg><span>Analyze</span></button>
+              <span class="sep"></span>
+              <div class="seg" role="radiogroup" aria-label="Window length" id="video-win" title="Length of the clip each request reads">
+                <button type="button" role="radio" data-win="2" aria-checked="false">2 s</button>
+                <button type="button" role="radio" data-win="4" aria-checked="true">4 s</button>
+                <button type="button" role="radio" data-win="8" aria-checked="false">8 s</button>
+                <button type="button" role="radio" data-win="0" aria-checked="false" title="One request for the whole clip, at most 32 frames spread over it. The token budget is shared by every frame, so more frames means smaller ones; lower Sampling for larger frames.">Whole clip</button>
+              </div>
+              <label class="check" title="Start a window every half window and draw each over its central half: a change inside a window, like a subject turning around, is placed twice as precisely, for twice the requests"><input type="checkbox" id="video-overlap" checked><span>Overlap</span></label>
+              <label class="ctl narrow">
+                <span class="ctl-top"><span>Sampling</span><output id="video-fps-out">2 fps</output></span>
+                <input type="range" id="video-fps" min="0.5" max="4" step="0.5" value="2">
+              </label>
+              <label class="ctl narrow" id="video-budget-ctl" title="Image tokens per window, shared by its frames">
+                <span class="ctl-top"><span>Token budget</span><output id="video-budget-out">512</output></span>
+                <input type="range" id="video-budget" min="128" max="1024" step="64" value="512">
+              </label>
+              <span class="grow"></span>
+              <button class="btn ghost when-loaded" id="video-grid-toggle" aria-pressed="false" disabled title="Overlay one window's token grid: one cell per token, each covering a pair of frames"><svg class="i" aria-hidden="true"><use href="#i-tokens"/></svg>Tokens</button>
+              <label class="btn ghost when-loaded"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Replace<input type="file" id="video-file-2" accept="video/*"></label>
+            </div>
+          </div>
+          <p class="cost-line" id="video-cost"></p>
+          <p class="error" id="video-error" role="alert"></p>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Timeline</h2>
+              <span class="spacer"></span>
+              <span class="panel-meta" id="video-status"></span>
+            </div>
+            <div class="progress" id="video-progress"><i></i></div>
+            <div id="video-score" class="video-score"></div>
+          </section>
+
+          <section class="panel" id="video-strip-panel" hidden>
+            <div class="panel-head">
+              <h2 class="panel-title">What the model reads</h2>
+              <span class="spacer"></span>
+              <span class="panel-meta" id="video-strip-note"></span>
+            </div>
+            <div id="video-strip" class="strip"></div>
+          </section>
+        </div>
+
+        <aside class="side-col" aria-label="Video answers">
+          <div class="side-head">
+            <h2 class="panel-title">Decisions</h2>
+            <span class="panel-meta" id="video-which"></span>
+            <span class="spacer"></span>
+            <button class="btn sm ghost" data-action="edit"><svg class="i" aria-hidden="true"><use href="#i-sliders"/></svg>Edit questions</button>
+          </div>
+          <div id="video-decisions" class="decisions-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Batch: many images, up to eight in flight -->
+    <section id="pane-batch" class="pane" role="tabpanel" aria-labelledby="tab-batch" hidden>
+      <div class="batch-hero" id="batch-empty">
+        <div class="empty">
+          <div class="hero">
+            <h1>Sort a folder of images by what is on them.</h1>
+            <div class="cta">
+              <label class="btn primary lg"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Choose a folder<input type="file" id="batch-folder" webkitdirectory multiple></label>
+              <label class="btn lg"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg>Choose files<input type="file" id="batch-files" multiple accept="image/png,image/jpeg"></label>
+            </div>
+            <p class="fine">or drop PNG and JPEG files anywhere</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="batch-main" hidden>
+        <div class="toolbar">
+          <label class="btn"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg>Add files<input type="file" id="batch-files-2" multiple accept="image/png,image/jpeg"></label>
+          <label class="btn"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Add folder<input type="file" id="batch-folder-2" webkitdirectory multiple></label>
+          <span class="sep"></span>
+          <button class="btn primary" id="batch-run"><svg class="i" aria-hidden="true"><use href="#i-bolt"/></svg>Run</button>
+          <button class="btn" id="batch-stop" disabled><svg class="i" aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>
+          <button class="btn ghost" id="batch-clear">Clear</button>
+          <span class="sep"></span>
+          <label class="ctl" id="batch-budget-ctl" title="Image tokens per image. 512 gave the same answers as 1,024 at about half the time on test screenshots; 256 starts to lose small text.">
+            <span class="ctl-top"><span>Token budget</span><output id="batch-budget-out">512</output></span>
+            <input type="range" id="batch-budget" min="64" max="1024" step="64" value="512">
+          </label>
+          <label class="ctl narrow" title="Requests in flight. The server packs them into one pass, so this bounds queueing; throughput barely changes.">
+            <span class="ctl-top"><span>In flight</span><output id="batch-conc-out">8</output></span>
+            <input type="range" id="batch-conc" min="1" max="8" step="1" value="8">
+          </label>
+          <span class="spacer"></span>
+          <button class="btn sm ghost" data-action="edit"><svg class="i" aria-hidden="true"><use href="#i-sliders"/></svg>Edit questions</button>
+        </div>
+        <div class="status-row">
+          <div class="progress" id="batch-progress"><i></i></div>
+          <span class="panel-meta" id="batch-status"></span>
+        </div>
+
+        <div class="batch-layout">
+          <aside class="facets" aria-label="Filters">
+            <div class="side-head">
+              <h2 class="panel-title">Filter</h2>
+              <span class="spacer"></span>
+              <button class="btn sm ghost" id="batch-reset" hidden>Reset</button>
+            </div>
+            <input type="search" id="batch-filter" placeholder="Search names and answers" aria-label="Search names and answers">
+            <div id="batch-facets"></div>
+          </aside>
+          <div>
+            <div class="view-bar">
+              <span class="muted small" id="batch-count"></span>
+              <span class="spacer"></span>
+              <div class="seg" role="radiogroup" aria-label="View">
+                <button type="button" role="radio" data-view="grid" aria-checked="true"><svg class="i" aria-hidden="true"><use href="#i-grid"/></svg>Grid</button>
+                <button type="button" role="radio" data-view="table" aria-checked="false"><svg class="i" aria-hidden="true"><use href="#i-table"/></svg>Table</button>
+              </div>
+              <button class="btn sm ghost" id="batch-export-json" disabled><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>JSON</button>
+              <button class="btn sm ghost" id="batch-export-csv" disabled><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>CSV</button>
+            </div>
+            <div id="batch-gallery" class="gallery"></div>
+            <div id="batch-table" class="table-wrap" hidden>
+              <table>
+                <thead><tr id="batch-head"></tr></thead>
+                <tbody id="batch-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ask: one image, many schemas, keyed prefix-cache reuse through the proxy -->
+    <section id="pane-ask" class="pane" role="tabpanel" aria-labelledby="tab-ask" hidden>
+      <div class="workspace">
+        <div class="main-col">
+          <div class="rig">
+            <div class="stage" id="ask-stage">
+              <img id="ask-img" class="view" alt="" hidden>
+              <canvas id="ask-grid" class="grid-overlay" hidden></canvas>
+              <div class="hud hud-bl"><span class="hud-chip" id="ask-geom" hidden></span></div>
+              <div class="empty" id="ask-empty">
+                <div class="hero">
+                  <h1>One image, as many questions as you like.</h1>
+                  <div class="cta">
+                    <label class="btn primary lg"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg>Choose an image<input type="file" id="ask-file" accept="image/png,image/jpeg"></label>
+                  </div>
+                  <p class="fine">or drop a PNG or JPEG here</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="dock">
+              <button class="btn primary" id="ask-go" disabled><svg class="i" aria-hidden="true"><use href="#i-bolt"/></svg>Ask <kbd>⌘↵</kbd></button>
+              <span class="sep"></span>
+              <label class="check" title="Local cleffa only: sends a session cache key so later asks can skip the vision tower. clef-server needs --prefix-cache-mb."><input type="checkbox" id="ask-cache" checked><span>Reuse the image</span></label>
+              <label class="check" title="If the image is over the server's per-image token limit, resend once with the media_kwargs bound the engine suggests in its error"><input type="checkbox" id="ask-bounds" checked><span>Fit the token limit</span></label>
+              <span class="grow"></span>
+              <button class="btn ghost when-loaded" id="ask-grid-toggle" aria-pressed="false" disabled title="Overlay the image-token grid"><svg class="i" aria-hidden="true"><use href="#i-tokens"/></svg>Tokens</button>
+              <label class="btn ghost when-loaded"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Replace<input type="file" id="ask-file-2" accept="image/png,image/jpeg"></label>
+            </div>
+          </div>
+          <p class="error" id="ask-error" role="alert"></p>
+
+          <section class="panel" id="ask-history-panel" hidden>
+            <div class="panel-head">
+              <h2 class="panel-title">History</h2>
+              <span class="spacer"></span>
+              <span class="panel-meta" id="ask-summary"></span>
+            </div>
+            <ol id="ask-history" class="history"></ol>
+          </section>
+        </div>
+
+        <aside class="side-col" aria-label="Answers">
+          <div class="side-head">
+            <h2 class="panel-title">Decisions</h2>
+            <span class="panel-meta" id="ask-which"></span>
+            <span class="spacer"></span>
+            <button class="btn sm ghost" data-action="edit"><svg class="i" aria-hidden="true"><use href="#i-sliders"/></svg>Edit questions</button>
+          </div>
+          <div id="ask-decisions" class="decisions-list"></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="scrim" class="scrim"></div>
+
+  <aside id="editor" class="drawer" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+    <div class="drawer-head">
+      <h2 id="editor-title">Questions</h2>
+      <span class="tag" id="editor-mode"></span>
+      <span class="spacer"></span>
+      <button class="icon-btn" data-close aria-label="Close"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="drawer-body">
+      <div class="presets" id="editor-presets" role="group" aria-label="Presets"></div>
+      <label class="field">
+        <span class="field-k">State <small>sent with every request</small></span>
+        <textarea id="editor-state" rows="2" spellcheck="false" placeholder="Text, or a JSON object"></textarea>
+      </label>
+      <div id="editor-questions" class="q-list"></div>
+      <button class="btn ghost block" id="editor-add"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>Add question</button>
+      <details id="editor-json-box" class="json-box">
+        <summary>Edit as request JSON</summary>
+        <textarea id="editor-json" rows="16" spellcheck="false" aria-label="Request JSON"></textarea>
+        <div class="row"><button class="btn sm" id="editor-json-apply">Apply JSON</button><span class="muted small">Media comes from the mode.</span></div>
+      </details>
+      <p id="editor-error" class="error" role="alert"></p>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn ghost" id="editor-copy"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy request</button>
+      <span class="spacer"></span>
+      <button class="btn primary" data-close>Done</button>
+    </div>
+  </aside>
+
+  <aside id="inspector" class="drawer wide" role="dialog" aria-modal="true" aria-labelledby="insp-title">
+    <div class="drawer-head">
+      <h2 id="insp-title">Last exchange</h2>
+      <span class="panel-meta" id="insp-meta"></span>
+      <span class="spacer"></span>
+      <button class="icon-btn" data-close aria-label="Close"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="drawer-body">
+      <div class="seg" role="radiogroup" aria-label="Show">
+        <button type="button" role="radio" data-tab="request" aria-checked="true">Request</button>
+        <button type="button" role="radio" data-tab="response" aria-checked="false">Response</button>
+        <button type="button" role="radio" data-tab="curl" aria-checked="false">curl</button>
+      </div>
+      <pre id="insp-code" class="code"></pre>
+      <p class="muted small" id="insp-note"></p>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn ghost" id="insp-copy"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button>
+      <span class="spacer"></span>
+      <button class="btn" id="insp-download" disabled><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Download request.json</button>
+    </div>
+  </aside>
+
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-title">
+    <div class="lb-img">
+      <img id="lb-img" alt="">
+      <button class="icon-btn lb-prev" id="lb-prev" aria-label="Previous image"><svg class="i" aria-hidden="true"><use href="#i-chev-l"/></svg></button>
+      <button class="icon-btn lb-next" id="lb-next" aria-label="Next image"><svg class="i" aria-hidden="true"><use href="#i-chev-r"/></svg></button>
+    </div>
+    <div class="lb-side">
+      <div class="lb-head"><h2 id="lb-title"></h2><button class="icon-btn" data-close aria-label="Close"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+      <p class="lb-meta" id="lb-meta"></p>
+      <div id="lb-decisions" class="decisions-list"></div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <template id="q-tpl">
+    <fieldset class="q">
+      <div class="q-top">
+        <span class="q-num"></span>
+        <input class="q-id" name="question_id" placeholder="question_id" aria-label="Question id" spellcheck="false">
+        <div class="seg q-type" role="radiogroup" aria-label="Answer type">
+          <button type="button" role="radio" data-type="noul" title="noul: probability of yes">Yes / no</button>
+          <button type="button" role="radio" data-type="choice" title="choice: one of a set">One of</button>
+          <button type="button" role="radio" data-type="score" title="score: an ordered scale">Scale</button>
+        </div>
+        <button class="icon-btn q-del" type="button" aria-label="Remove question"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button>
+      </div>
+      <textarea class="q-ins" rows="1" name="instructions" placeholder="Instruction (defaults to the id)" aria-label="Instruction"></textarea>
+      <div class="q-criteria"></div>
+    </fieldset>
+  </template>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
