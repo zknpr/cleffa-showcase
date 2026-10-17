@@ -241,6 +241,43 @@ export const PRESETS = {
         },
       ],
     },
+    // For an audio clip in Ask, which needs clef-omni.
+    {
+      name: "Audio clip",
+      state: "An audio recording.",
+      questions: [
+        { id: "speech", type: "noul", instructions: "Is someone speaking?" },
+        {
+          id: "speakers",
+          type: "choice",
+          instructions: "How many different people speak?",
+          options: [
+            { id: "none", description: null },
+            { id: "one", description: null },
+            { id: "two", description: null },
+            { id: "three_or_more", description: null },
+          ],
+        },
+        {
+          id: "language",
+          type: "choice",
+          instructions: "Main spoken language",
+          options: [
+            { id: "en", description: "English" },
+            { id: "es", description: "Spanish" },
+            { id: "fr", description: "French" },
+            { id: "de", description: "German" },
+            { id: "it", description: "Italian" },
+            { id: "zh", description: "Chinese" },
+            { id: "ja", description: "Japanese" },
+            { id: "other", description: null },
+            { id: "none", description: "No speech" },
+          ],
+        },
+        { id: "music", type: "noul", instructions: "Is music playing?" },
+        { id: "noise", type: "score", instructions: "How noisy is the background?", levels: ["silent", "quiet", "noisy", "very_noisy"] },
+      ],
+    },
   ],
 
   video: [
@@ -315,6 +352,29 @@ export const PRESETS = {
         },
         { id: "error_shown", type: "noul", instructions: "Does an error message or dialog appear?" },
         { id: "switches_app", type: "noul", instructions: "Does the user switch to a different application or window?" },
+      ],
+    },
+    // Uses the soundtrack, which only clef-omni receives.
+    {
+      name: "Sound and picture",
+      state: "A short clip from a video, with its sound.",
+      questions: [
+        { id: "speech", type: "noul", instructions: "Is someone speaking during the clip?" },
+        { id: "speaker_visible", type: "noul", instructions: "Is the person speaking visible on screen?" },
+        { id: "music", type: "noul", instructions: "Is music playing?" },
+        {
+          id: "loudest",
+          type: "choice",
+          instructions: "What is the loudest sound?",
+          options: [
+            { id: "speech", description: null },
+            { id: "music", description: null },
+            { id: "traffic_or_machines", description: null },
+            { id: "nature", description: null },
+            { id: "silence", description: null },
+            { id: "other", description: null },
+          ],
+        },
       ],
     },
   ],

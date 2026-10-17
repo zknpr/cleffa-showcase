@@ -1,34 +1,50 @@
-// Ask mode: one image, many schemas. With reuse on, the proxy sends a per-session
-// X-Clef-Prefix-Cache key, and clef-server's keyed cache can resume after the image (its merged
-// features included) when only the questions change. The page cannot see a hit, only the time;
-// the history therefore labels what was sent and shows what was measured.
+// Ask mode: one image, one audio clip (clef-omni) or both, many schemas. With reuse on, the proxy
+// sends a per-session X-Clef-Prefix-Cache key, and clef-server's keyed cache can resume after the
+// image (its merged features included) when only the questions change. The page cannot see a hit,
+// only the time; the history therefore labels what was sent and shows what was measured. cleffa
+// has no prefix reuse for Omni, so its requests go without a key.
 
 import { $, el, fmtMs, fmtInt, quantile } from "./dom.js";
 import { systemone, describeError, ApiError } from "./api.js";
 import { buildRequest } from "./schema.js";
 import { DecisionPanel, answerChips } from "./answers.js";
-import { prepareImage, drawTokenGrid, loadImage } from "./media.js";
+import { prepareImage, drawTokenGrid, loadImage, fileToDataUrl } from "./media.js";
 import { smartResize, MIN_PIXELS } from "./resize.js";
+import { AUDIO_RATE, MAX_AUDIO_FILE, MAX_AUDIO_SAMPLES, audioTokens, decodeAudio, drawWaveform, encodeWav } from "./audio.js";
+import { isOmni, imageMaxPixels } from "./models.js";
 import { dropZone } from "./ui.js";
-import { on } from "./store.js";
+import { on, settings } from "./store.js";
 import { snapshotConnection } from "./connection.js";
 
-// `gen` numbers the image: an ask records its answers only if the image it was sent with is still
-// the one on screen, so replacing the image mid-ask can never file one image's answers under another.
-const A = { dataUrl: null, name: null, w: 0, h: 0, resized: null, bounds: null, asks: [], busy: false, loading: false, gen: 0, grid: false, panel: null, selected: null };
+const MAX_BODY = 8 * 1024 * 1024; // clef-server's default --max-body
+
+// `gen` numbers the media on screen: an ask records its answers only if the image and audio it was
+// sent with are still the ones shown, so replacing either mid-ask never files one input's answers
+// under another. `loads` numbers the decodes of each kind, so a newer file of one kind supersedes
+// an older one still decoding without cancelling a decode of the other kind.
+const A = {
+  dataUrl: null, name: null, w: 0, h: 0, source: null, resized: null, bounds: null, audio: null,
+  asks: [], busy: false, gen: 0, grid: false, panel: null, selected: null,
+  loads: { image: 0, audio: 0 }, loading: { image: false, audio: false }, reuseTitle: "", model: null,
+};
 
 export function initAsk() {
   A.panel = new DecisionPanel($("#ask-decisions"));
+  A.reuseTitle = $("#ask-cache").parentElement.title;
   for (const id of ["ask-file", "ask-file-2"]) $(`#${id}`).addEventListener("change", (e) => { setImage(e.target.files[0]); e.target.value = ""; });
-  dropZone($("#ask-stage"), $("#ask-stage"), (dt) => setImage(dt.files[0]));
+  for (const id of ["ask-audio", "ask-audio-2"]) $(`#${id}`).addEventListener("change", (e) => { setAudio(e.target.files[0]); e.target.value = ""; });
+  dropZone($("#ask-stage"), $("#ask-stage"), (dt) => { const f = dt.files[0]; (/^(audio|video)\//.test(f?.type) ? setAudio : setImage)(f); }); // a video gives its sound
+  $("#ask-audio-remove").addEventListener("click", removeAudio);
   $("#ask-go").addEventListener("click", ask);
   $("#ask-grid-toggle").addEventListener("click", (e) => {
     A.grid = !A.grid;
     e.currentTarget.setAttribute("aria-pressed", String(A.grid));
     paintGrid();
   });
-  new ResizeObserver(paintGrid).observe($("#ask-stage"));
-  on("schema", (d) => { if (d.mode === "ask" && !A.selected) showPending(); });
+  new ResizeObserver(() => { paintGrid(); paintWave(); }).observe($("#ask-stage"));
+  // A model change is announced as a schema change for every mode, as is every edit.
+  on("schema", (d) => { if (d.mode === "ask") { if (!A.selected) showPending(); if (settings.model !== A.model) modelChanged(); } });
+  modelChanged();
   renderHistory();
 }
 
@@ -47,49 +63,129 @@ function showPending() {
   $("#ask-which").textContent = "";
 }
 
+const loadingAny = () => A.loading.image || A.loading.audio;
+function refreshGo() { $("#ask-go").disabled = A.busy || loadingAny() || (!A.dataUrl && !A.audio); }
+
+// The model sets what an image costs by default, whether audio can go at all, and whether reuse exists.
+function modelChanged() {
+  A.model = settings.model;
+  const omni = isOmni(settings.model), reuse = $("#ask-cache");
+  reuse.disabled = omni;
+  reuse.parentElement.title = omni ? "cleffa has no prefix reuse for clef-omni; every ask runs in full." : A.reuseTitle;
+  if (A.dataUrl && !A.bounds) showGeometry();
+  showAudio();
+}
+
+// New media on screen: earlier answers belong to the earlier input.
+function mediaChanged() {
+  A.gen++;
+  Object.assign(A, { asks: [], selected: null });
+  $("#ask-empty").hidden = !!(A.dataUrl || A.audio);
+  showAudio();
+  refreshGo();
+  setError("");
+  showPending();
+  renderHistory();
+}
+
 async function setImage(file) {
   if (!file) return;
   if (file.type !== "image/png" && file.type !== "image/jpeg") { setError(`${file.name}: PNG or JPEG only (the engine does not decode WebP)`); return; }
-  const gen = ++A.gen;
-  A.loading = true;
-  $("#ask-go").disabled = true;
+  const load = ++A.loads.image;
+  A.loading.image = true;
+  refreshGo();
   let prep;
-  try { prep = await prepareImage(file); } catch (e) { if (gen === A.gen) { A.loading = false; $("#ask-go").disabled = !A.dataUrl || A.busy; setError(`${file.name}: ${e.message}`); } return; }
-  if (gen !== A.gen) return; // a newer image was chosen while this one decoded
-  A.loading = false;
-  Object.assign(A, { dataUrl: prep.dataUrl, name: file.name, bounds: null, asks: [], selected: null });
+  try { prep = await prepareImage(file); } catch (e) { if (load === A.loads.image) { A.loading.image = false; refreshGo(); setError(`${file.name}: ${e.message}`); } return; }
+  if (load !== A.loads.image) return; // a newer image was chosen while this one decoded
   const img = $("#ask-img");
-  img.src = A.dataUrl;
+  img.src = prep.dataUrl;
   img.hidden = false;
   await img.decode().catch(() => {});
-  if (gen !== A.gen) return;
-  A.w = img.naturalWidth;
-  A.h = img.naturalHeight;
-  A.resized = smartResize(A.h, A.w);
-  $("#ask-empty").hidden = true;
-  $("#ask-go").disabled = A.busy;
-  $("#ask-grid-toggle").disabled = !A.resized;
-  const shrunk = prep.shrunk ? ` (shrunk from ${prep.w}×${prep.h})` : "";
+  if (load !== A.loads.image) return;
+  A.loading.image = false;
+  Object.assign(A, { dataUrl: prep.dataUrl, name: file.name, w: img.naturalWidth, h: img.naturalHeight, bounds: null, source: prep.shrunk ? { w: prep.w, h: prep.h } : null });
+  showGeometry();
+  mediaChanged();
+}
+
+function showGeometry() {
+  A.resized = smartResize(A.h, A.w, MIN_PIXELS, imageMaxPixels(settings.model));
+  const shrunk = A.source ? ` (shrunk from ${A.source.w}×${A.source.h})` : "";
   const geom = $("#ask-geom");
   geom.hidden = false;
   geom.textContent = A.resized
     ? `${A.w}×${A.h}${shrunk} → ${A.resized.w}×${A.resized.h}, ${fmtInt(A.resized.tokens)} image tokens`
     : `${A.w}×${A.h}: aspect ratio over 200, the processor rejects it`;
-  setError("");
-  showPending();
-  renderHistory();
+  $("#ask-grid-toggle").disabled = !A.resized;
   paintGrid();
 }
 
+// The clip is decoded, resampled and encoded once; the player plays the WAV the requests carry.
+async function setAudio(file) {
+  if (!file) return;
+  if (file.size > MAX_AUDIO_FILE) { setError(`${file.name}: over ${MAX_AUDIO_FILE / 1048576} MiB; the browser decodes audio in one piece`); return; }
+  const load = ++A.loads.audio;
+  A.loading.audio = true;
+  refreshGo();
+  const done = (msg) => { if (load === A.loads.audio) { A.loading.audio = false; refreshGo(); if (msg) setError(`${file.name}: ${msg}`); } };
+  let samples, wav, dataUrl;
+  try {
+    samples = await decodeAudio(await file.arrayBuffer());
+    if (load !== A.loads.audio) return;
+    if (!audioTokens(samples.length)) { done("too short: the model needs more than 200 samples (12.5 ms)"); return; }
+    wav = encodeWav(samples);
+    dataUrl = await fileToDataUrl(new Blob([wav], { type: "audio/wav" }));
+  } catch (e) { done(`the browser could not decode this audio (${e.message})`); return; }
+  if (load !== A.loads.audio) return;
+  done();
+  if (A.audio) URL.revokeObjectURL(A.audio.url);
+  A.audio = { name: file.name, samples, dataUrl, bytes: wav.length, tokens: audioTokens(samples.length), url: URL.createObjectURL(new Blob([wav], { type: "audio/wav" })) };
+  $("#ask-player").src = A.audio.url;
+  mediaChanged();
+}
+
+function removeAudio() {
+  if (!A.audio) return;
+  A.loads.audio++; // a clip still decoding is dropped as well
+  A.loading.audio = false;
+  URL.revokeObjectURL(A.audio.url);
+  $("#ask-player").removeAttribute("src");
+  A.audio = null;
+  mediaChanged();
+}
+
+function showAudio() {
+  const a = A.audio;
+  $("#ask-audio-box").hidden = !a;
+  if (!a) return;
+  const over = [];
+  if (a.samples.length > MAX_AUDIO_SAMPLES) over.push(`${MAX_AUDIO_SAMPLES / AUDIO_RATE} s of audio`);
+  if (a.dataUrl.length + (A.dataUrl?.length ?? 0) > MAX_BODY) over.push("8 MiB per request");
+  const parts = [`${(a.samples.length / AUDIO_RATE).toFixed(1)} s`, "16 kHz mono", `${fmtInt(a.tokens)} audio tokens`];
+  if (!isOmni(settings.model)) parts.push("needs clef-omni");
+  else if (over.length) parts.push(`over clef-server's default ${over.join(" and ")}`);
+  const geom = $("#ask-audio-geom");
+  geom.textContent = parts.join(", ");
+  geom.title = `${a.name}: ${fmtInt(a.samples.length)} samples, ${(a.bytes / 1048576).toFixed(2)} MiB as PCM16 WAV`;
+  paintWave();
+}
+
 async function ask() {
-  if (!A.dataUrl || A.busy || A.loading) return;
+  if ((!A.dataUrl && !A.audio) || A.busy || loadingAny()) return;
   const gen = A.gen, dataUrl = A.dataUrl;
+  const extra = {};
+  if (A.audio) extra.audio = [A.audio.dataUrl];
+  if (A.bounds) extra.media_kwargs = A.bounds;
   let req;
-  try { req = buildRequest([dataUrl], A.bounds ? { media_kwargs: A.bounds } : {}, "ask"); } catch (e) { setError(`Questions: ${e.message}`); return; }
-  const cache = $("#ask-cache").checked;
+  try { req = buildRequest(dataUrl ? [dataUrl] : [], extra, "ask"); } catch (e) { setError(`Questions: ${e.message}`); return; }
+  if (req.audio && !isOmni(req.model)) {
+    setError(`${req.model} takes no audio. Choose clef-omni in the connection menu (for local cleffa, start clef-server with gguf/clef-omni.gguf), or remove the audio.`);
+    return;
+  }
+  const cache = $("#ask-cache").checked && !isOmni(req.model);
   const connection = snapshotConnection();
   A.busy = true;
-  $("#ask-go").disabled = true;
+  refreshGo();
   $("#ask-stage").classList.add("busy");
   $("#ask-decisions").classList.add("busy-panel");
   A.panel.setQuestions(req.questions);
@@ -108,14 +204,14 @@ async function ask() {
       r = await systemone(req, { cache, source: "ask", connection });
       retried = bounds;
     }
-    if (gen !== A.gen) return; // answered for an image that has since been replaced
+    if (gen !== A.gen) return; // answered for media that has since been replaced
     if (retried) {
       A.bounds = retried;
       const rs = smartResize(A.h, A.w, MIN_PIXELS, retried.max_pixels);
       if (rs) { A.resized = rs; $("#ask-geom").textContent = `${A.w}×${A.h} → ${rs.w}×${rs.h} by the engine, ${fmtInt(rs.tokens)} image tokens`; paintGrid(); }
     }
     req = r.request;
-    if (r.backend === "hosted" && req.images[0] !== dataUrl) {
+    if (r.backend === "hosted" && dataUrl && req.images[0] !== dataUrl) {
       const sent = await loadImage(req.images[0]);
       if (gen !== A.gen) return;
       A.resized = smartResize(sent.naturalHeight, sent.naturalWidth);
@@ -136,7 +232,7 @@ async function ask() {
     else showPending();
   } finally {
     A.busy = false;
-    $("#ask-go").disabled = A.loading || !A.dataUrl;
+    refreshGo();
     $("#ask-stage").classList.remove("busy");
     $("#ask-decisions").classList.remove("busy-panel");
   }
@@ -144,9 +240,10 @@ async function ask() {
 
 function renderHistory() {
   const list = $("#ask-history");
-  $("#ask-history-panel").hidden = !A.dataUrl;
+  const media = !!(A.dataUrl || A.audio);
+  $("#ask-history-panel").hidden = !media;
   if (!A.asks.length) {
-    list.replaceChildren(el("li", { class: "history-empty", text: A.dataUrl ? "Ask, then edit the questions and ask again to compare." : "Choose an image to start." }));
+    list.replaceChildren(el("li", { class: "history-empty", text: media ? "Ask, then edit the questions and ask again to compare." : "Choose an image or a sound to start." }));
     $("#ask-summary").textContent = "";
     return;
   }
@@ -187,4 +284,8 @@ function paintGrid() {
   const show = A.grid && !!A.dataUrl && !!A.resized;
   c.hidden = !show;
   if (show) drawTokenGrid(c, A.w, A.h, A.resized);
+}
+
+function paintWave() {
+  if (A.audio && !$("#ask-audio-box").hidden) drawWaveform($("#ask-wave"), A.audio.samples);
 }

@@ -13,6 +13,17 @@
 //             orange square moving right) at 2 fps, do_sample_frames false, the 512-token budget.
 //             Made with ffmpeg: a 640x360 clip from lavfi `color` sources (the square overlaid at
 //             x = 40 + 80t), one frame at each (k + 0.5) / 2 s, scaled to 320x180, JPEG -q:v 4.
+//
+// clef-omni refuses video001 (its videos_kwargs lacks fps 2) and counts tokens differently, so it
+// gets v001 and two fixtures of its own, in the shapes the page sends it:
+//
+//   video001-omni  video001's frames as an Omni Video window: fps 2 in the video and in
+//                  videos_kwargs, the 512-token budget as a per-frame size (131,072 pixels), and a
+//                  soundtrack with use_audio_in_video
+//   audio001       Ask with audio alone
+//
+// The sound is 0.25 * sin(2 pi 440 i / 16000), 4 s for the window and 2 s alone, as PCM16 WAV from
+// public/js/audio.js encodeWav.
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -69,10 +80,18 @@ async function main() {
   const model: string = health.local.model ?? "unknown";
   pass(`proxy up, engine healthy (model ${model}, ${health.local.ms} ms)`);
 
+  const omni = /omni/i.test(model);
   await fixture(model, "v001", { wearing_glasses: "noul", mood: "choice", energy: "score" },
-    373, "80 of them image: 336x252 resizes to 320x256");
-  await fixture(model, "video001", { motion: "choice", square_visible: "noul", speed: "score" },
-    580, "240 of them video: 4 pairs of frames at 320x192, 6x10 tokens each");
+    omni ? 368 : 373, "80 of them image: 336x252 resizes to 320x256");
+  if (omni) {
+    const sound = { sound_present: "noul", sound_kind: "choice" };
+    await fixture(model, "video001-omni", { motion: "choice", square_visible: "noul", ...sound },
+      685, "240 video, 4 pairs of 6x10, and 52 audio for its 4 s of sound");
+    await fixture(model, "audio001", sound, 255, "26 of them audio: 2 s at 16 kHz");
+  } else {
+    await fixture(model, "video001", { motion: "choice", square_visible: "noul", speed: "score" },
+      580, "240 of them video: 4 pairs of frames at 320x192, 6x10 tokens each");
+  }
 
   // Cross-origin posts must be refused by the proxy (same-origin page only).
   const xo = await fetch(`${base}/api/systemone`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://evil.example", "Sec-Fetch-Site": "cross-site" }, body: "{}" });

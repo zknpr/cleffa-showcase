@@ -7,6 +7,7 @@ import { $, $$, el, icon, autosize } from "./dom.js";
 import { settings, emit } from "./store.js";
 import { openOverlay, toast } from "./ui.js";
 import { optionColor } from "./answers.js";
+import { MODELS } from "./models.js";
 
 const LABEL = { live: "Live", video: "Video", batch: "Batch", ask: "Ask" };
 const schemas = {};
@@ -261,7 +262,7 @@ function applyJson() {
     const req = JSON.parse($("#editor-json").value);
     const shape = fromRequest(req);
     schemas[mode] = { preset: -1, ...shape };
-    if (req.model === "clef" || req.model === "clef-flash") emit("model", req.model);
+    if (MODELS.includes(req.model)) emit("model", req.model);
     renderEditor();
     emit("schema", { mode });
     toast("Applied.");

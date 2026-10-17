@@ -199,6 +199,7 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; backgro
 input[type="range"]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--accent); }
 input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(246, 130, 31, 0.22); }
 input[type="range"]:focus-visible { outline: none; }
+input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 5px rgba(246, 130, 31, 0.45); }
 
 .ctl { display: grid; gap: 2px; min-width: 170px; }
@@ -255,6 +256,19 @@ main { max-width: 1680px; margin: 0 auto; padding: 20px 20px 40px; }
   font: 500 12px/1 var(--sans); white-space: nowrap;
 }
 .hud-chip.accent { color: var(--accent); }
+/* An audio clip fills an otherwise empty stage; beside an image it is a strip along the bottom,
+   and the image's geometry chip moves to the top. */
+.audio-box { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 24px; }
+.audio-box .wave { width: 100%; height: 45%; }
+.audio-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
+.audio-row audio { flex: 1 1 220px; min-width: 0; height: 32px; }
+.audio-row .hud-chip { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 24px; }
+.stage:has(> img.view:not([hidden])) > .audio-box {
+  inset: auto 0 0 0; gap: 8px; padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.stage:has(> img.view:not([hidden])) > .audio-box .wave { height: 40px; }
+.stage:has(> .audio-box:not([hidden])) > .hud-bl { top: 14px; bottom: auto; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
 .stage.live .rec-dot { background: var(--rec); box-shadow: 0 0 0 4px rgba(255, 77, 94, 0.2); animation: pulse 1.2s infinite; }
 
@@ -626,6 +640,8 @@ td.err { color: var(--bad); white-space: normal; max-width: 320px; font: 11.5px/
   /* With nothing to show yet, the hero sets the stage's height instead of being clipped by it. */
   .stage:has(> .empty:not([hidden])) { aspect-ratio: auto; }
   .stage > .empty { position: relative; inset: auto; min-height: 100%; padding: 40px 12px; }
+  /* Beside an image on a phone, the clip keeps only its player. */
+  .stage:has(> img.view:not([hidden])) > .audio-box .wave { display: none; }
   .score-body { grid-template-columns: 96px minmax(0, 1fr); }
   .lightbox { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; overflow-y: auto; }
   .lb-img { padding: 16px 52px; }

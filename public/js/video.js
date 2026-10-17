@@ -12,14 +12,22 @@
 // precisely for twice the requests. The page computes the engine's frame budget
 // with the processor's own video smart_resize, so the token cost on screen is the one the engine
 // charges.
+//
+// clef-omni reads video differently, and cleffa refuses anything else: frames at exactly 2 per
+// second (`fps: 2`, repeated in videos_kwargs), each frame sized on its own (so the budget is
+// split over the window's frame pairs), positions instead of "<t seconds>" text, and an optional
+// soundtrack per video. The page decodes the clip's sound once, 16 kHz mono, and sends each window
+// the WAV of exactly the span its frames cover, with use_audio_in_video.
 
 import { $, $$, el, icon, fmtMs, fmtInt, fmtClock, quantile } from "./dom.js";
 import { systemone, describeError, ApiError } from "./api.js";
 import { buildRequest, tryQuestions } from "./schema.js";
 import { DecisionPanel } from "./answers.js";
 import { Score } from "./score.js";
-import { drawTokenGrid } from "./media.js";
-import { videoResize, roundHalfEven, FACTOR, VIDEO_MIN_PIXELS, PIXELS_PER_VIDEO_TOKEN } from "./resize.js";
+import { drawTokenGrid, fileToDataUrl } from "./media.js";
+import { videoResize, omniVideoResize, videoSize, roundHalfEven, FACTOR, OMNI_VIDEO_MIN_PIXELS } from "./resize.js";
+import { AUDIO_RATE, MAX_AUDIO_FILE, audioTokens, decodeAudio, encodeWav } from "./audio.js";
+import { isOmni } from "./models.js";
 import { bindRange, dropZone, setRadio, toast } from "./ui.js";
 import { settings, on, emit } from "./store.js";
 import { snapshotConnection } from "./connection.js";
@@ -31,10 +39,11 @@ const MAX_FRAMES = 32;   // clef-server's default --max-video-frames
 const MAX_WINDOWS = 300;
 const MAX_CLIP = 600;    // seconds: the engine's limit for one frame array, so for "whole clip"
 const IN_FLIGHT = 2;     // the browser seeks out the next window while the engine reads this one
+const OMNI_FPS = 2;      // the only frame rate cleffa accepts for clef-omni frame arrays
 
 const V = {
-  url: null, name: null, duration: 0, w: 0, h: 0, ready: false,
-  winSec: 4, fps: 2, budget: 512, overlap: true,
+  url: null, name: null, file: null, duration: 0, w: 0, h: 0, ready: false,
+  winSec: 4, fps: 2, budget: 512, overlap: true, sound: true, track: null,
   windows: [], qkey: "", current: -1, gen: 0, running: false, halt: false, grid: false,
   panel: null, score: null, raf: 0,
   probe: document.createElement("video"), canvas: document.createElement("canvas"), thumb: document.createElement("canvas"),
@@ -50,7 +59,9 @@ export function initVideo() {
   dropZone($("#video-stage"), $("#video-stage"), (dt) => load(dt.files[0]));
   $("#video-run").addEventListener("click", () => (V.running ? stop() : analyze()));
   for (const b of $$("[data-win]", $("#video-win"))) b.addEventListener("click", () => { V.winSec = Number(b.dataset.win); setRadio($("#video-win"), "data-win", b.dataset.win); replan(); });
+  $('[data-win="0"]').dataset.denseTitle = $('[data-win="0"]').title; // refreshCost swaps it on clef-omni
   $("#video-overlap").addEventListener("change", (e) => { V.overlap = e.target.checked; replan(); });
+  $("#video-sound").addEventListener("change", (e) => { V.sound = e.target.checked; replan(); });
   bindRange($("#video-fps"), $("#video-fps-out"), (v) => `${v} fps`, (v) => { V.fps = v; replan(); });
   bindRange($("#video-budget"), $("#video-budget-out"), (v) => fmtInt(v), (v) => { V.budget = v; replan(); });
   $("#video-grid-toggle").addEventListener("click", (e) => {
@@ -93,7 +104,7 @@ async function load(file) {
   stop();
   const generation = ++V.gen;
   if (V.url) URL.revokeObjectURL(V.url);
-  Object.assign(V, { url: URL.createObjectURL(file), name: file.name, ready: false, duration: 0, w: 0, h: 0, windows: [], current: -1 });
+  Object.assign(V, { url: URL.createObjectURL(file), name: file.name, file, track: null, ready: false, duration: 0, w: 0, h: 0, windows: [], current: -1 });
   const vid = $("#vid");
   vid.src = V.url;
   V.probe.src = V.url;
@@ -118,8 +129,28 @@ async function load(file) {
   $("#video-grid-toggle").disabled = false;
   setError("");
   V.score.setRange(0, V.duration);
+  if (isOmni(settings.model)) readTrack();
   replan();
   syncPlayhead();
+}
+
+// The clip's sound for clef-omni, decoded once per file. decodeAudioData reads the audio track of
+// a video file as it would an audio file, and rejects a file without one.
+function readTrack() {
+  if (!V.file) return Promise.resolve();
+  if (V.track?.file === V.file) return V.track.promise;
+  const track = { file: V.file, samples: null, error: null, promise: null };
+  V.track = track;
+  track.promise = (async () => {
+    try {
+      if (track.file.size > MAX_AUDIO_FILE) throw new Error(`the file is over ${MAX_AUDIO_FILE / 1048576} MiB, too large to decode its sound in the browser`);
+      track.samples = await decodeAudio(await track.file.arrayBuffer());
+    } catch (e) {
+      track.error = e instanceof DOMException && e.name === "EncodingError" ? "the clip has no sound the browser can decode" : e.message;
+    }
+    if (V.track === track) refreshCost();
+  })();
+  return track.promise;
 }
 
 function loaded(v) {
@@ -172,6 +203,7 @@ function grabSize(w = V.w || 1280, h = V.h || 720) {
 // shows [s0, s1), its central half, extended to the clip's ends for the first and the last.
 function plan(D = V.duration) {
   const g = grabSize();
+  const omni = isOmni(settings.model);
   const whole = V.winSec === 0;
   const dur = D > 0 ? D : whole ? 12 : V.winSec; // before a clip: one window, to show its cost
   const cuts = whole ? 1 : Math.max(1, Math.round(dur / V.winSec));
@@ -179,10 +211,13 @@ function plan(D = V.duration) {
   const overlap = V.overlap && cuts > 1;
   const step = overlap ? len / 2 : len;
   const count = overlap ? 2 * cuts - 1 : cuts;
-  const n = Math.min(MAX_FRAMES, Math.max(2, 2 * Math.round((len * V.fps) / 2)));
-  const resized = videoResize(n, g.h, g.w, VIDEO_MIN_PIXELS, V.budget * PIXELS_PER_VIDEO_TOKEN);
+  // Omni: whole seconds of the window at 2 frames each, an even count that never outruns it.
+  const n = omni ? 2 * Math.floor(len + 1e-9) : Math.min(MAX_FRAMES, Math.max(2, 2 * Math.round((len * V.fps) / 2)));
+  const resized = resizeFor(n, g, V.budget, omni);
   let error = null;
   if (Math.min(g.w, g.h) < FACTOR) error = "the video is under 32 pixels on a side; the engine needs at least 32";
+  else if (omni && n < 2) error = "clef-omni reads 2 frames a second and needs at least a second of video";
+  else if (omni && n > MAX_FRAMES) error = `clef-omni reads exactly 2 frames a second, so one request covers at most ${MAX_FRAMES / OMNI_FPS} s (clef-server's ${MAX_FRAMES} frames); choose a window`;
   else if (!resized) error = "the video's aspect ratio is over 200; the processor rejects it";
   else if (whole && len > MAX_CLIP) error = `a whole clip can be at most ${MAX_CLIP / 60} minutes (the engine's limit for one video); choose a window`;
   else if (count > MAX_WINDOWS) error = `${count} windows; choose a longer window (at most ${MAX_WINDOWS})`;
@@ -190,13 +225,21 @@ function plan(D = V.duration) {
     const t0 = i * step, t1 = i === count - 1 ? dur : t0 + len;
     const s0 = i === 0 ? 0 : overlap ? t0 + step / 2 : t0;
     const s1 = i === count - 1 ? dur : overlap ? t1 - step / 2 : t1;
+    // Omni's frames are half a second apart, centred in the window; a0..a1 is the span they
+    // cover, which is the stretch of sound the window carries.
+    const a0 = omni ? t0 + (t1 - t0 - n / OMNI_FPS) / 2 : t0, a1 = omni ? a0 + n / OMNI_FPS : t1;
     return {
-      i, t0, t1, s0, s1, n, fps: n / (t1 - t0), state: "idle",
-      times: Array.from({ length: n }, (_, k) => t0 + ((k + 0.5) * (t1 - t0)) / n),
-      thumbs: null, frames: null, answers: null, error: null, server: null, total: null, tokens: null, resized,
+      i, t0, t1, s0, s1, a0, a1, n, omni, fps: omni ? OMNI_FPS : n / (t1 - t0), state: "idle",
+      times: Array.from({ length: n }, (_, k) => (omni ? a0 + (k + 0.5) / OMNI_FPS : t0 + ((k + 0.5) * (t1 - t0)) / n)),
+      thumbs: null, frames: null, audio: null, answers: null, error: null, server: null, total: null, tokens: null, resized,
     };
   });
-  return { windows, count, len, step, overlap, n, resized, grab: g, error, whole, assumed: !(D > 0) };
+  return { windows, count, len, step, overlap, n, resized, grab: g, error, whole, omni, assumed: !(D > 0) };
+}
+
+function resizeFor(n, g, budget, omni) {
+  const size = videoSize(n, budget, omni);
+  return (omni ? omniVideoResize : videoResize)(n, g.h, g.w, size.shortest_edge, size.longest_edge);
 }
 
 // The clip, the window, the sampling or the budget changed: old results belong to the old cut. (A
@@ -217,23 +260,48 @@ function refreshCost() {
   const r = p.resized;
   const unsupported = settings.backend === "hosted" ? "Cloudflare does not accept video. Connect local cleffa or a SystemOne API that does." : null;
   const eff = p.n / p.len;
-  const sampling = Math.abs(eff - V.fps) > 0.05 ? `${p.n} frames (${eff.toFixed(2)} fps)` : `${p.n} frames`;
+  const sampling = p.omni ? `${p.n} frames, 2 a second` : Math.abs(eff - V.fps) > 0.05 ? `${p.n} frames (${eff.toFixed(2)} fps)` : `${p.n} frames`;
   const shape = p.whole ? (p.assumed ? "Whole clip" : `Whole clip, ${p.len.toFixed(1)} s`)
     : p.count > 1 ? `${p.count} windows of ${p.len.toFixed(1)} s${p.overlap ? `, one every ${p.step.toFixed(1)} s` : ""}` : `One ${p.len.toFixed(1)} s window`;
   const cost = $("#video-cost");
+  const size = videoSize(p.n, V.budget, p.omni);
+  // Omni's own processor never makes a frame smaller than 131,072 pixels (128 tokens a pair). The
+  // budget's share can be, past 4 s at 512 tokens; cleffa accepts it, but it is not what Omni sees.
+  const small = p.omni && size.longest_edge < OMNI_VIDEO_MIN_PIXELS
+    ? ` Frames are held under clef-omni's own minimum of ${fmtInt(OMNI_VIDEO_MIN_PIXELS)} pixels; shorter windows or a larger budget raise them.` : "";
   $("#video-strip-panel").hidden = !V.ready;
   // The plan is shown once there is a clip to plan for; an unsupported service is said at once.
   cost.textContent = unsupported ?? (!V.ready ? "" : p.error)
-    ?? (p.whole && p.assumed ? `Whole clip, up to ${MAX_FRAMES} frames.`
-      : `${shape}. ${sampling} at ${r.w}×${r.h}, ${fmtInt(r.tokens)} tokens per window${p.assumed ? " for a 16:9 clip" : ""}.`);
+    ?? (p.whole && p.assumed ? (p.omni ? `Whole clip, 2 frames a second, up to ${MAX_FRAMES / OMNI_FPS} s.` : `Whole clip, up to ${MAX_FRAMES} frames.`)
+      : `${shape}. ${sampling} at ${r.w}×${r.h}, ${fmtInt(r.tokens)} tokens per window${p.assumed ? " for a 16:9 clip" : ""}${p.omni ? soundNote(p.n) : ""}.${small}`);
   cost.title = unsupported || p.error || (p.whole && p.assumed) ? "" : `${r.pairs} frame pairs, each a ${r.w / FACTOR}×${r.h / FACTOR} token grid`;
-  $("#video-budget-ctl").title = `Image tokens per window, shared by its frames (videos_kwargs.size ≤ ${fmtInt(V.budget * PIXELS_PER_VIDEO_TOKEN)} px)`;
+  $("#video-budget-ctl").title = p.omni ? `Image tokens per window, split over its ${Math.ceil(p.n / 2)} frame pairs (videos_kwargs.size ≤ ${fmtInt(size.longest_edge)} px per frame)`
+    : `Image tokens per window, shared by its frames (videos_kwargs.size ≤ ${fmtInt(size.longest_edge)} px)`;
+  // clef-omni takes frames at 2 per second only; the slider keeps its value for the other models.
+  const fps = $("#video-fps");
+  fps.disabled = V.running || p.omni;
+  $("#video-fps-out").value = p.omni ? `${OMNI_FPS} fps` : `${V.fps} fps`;
+  fps.parentElement.title = p.omni ? "clef-omni reads exactly 2 frames a second" : "";
+  const whole = $('[data-win="0"]');
+  whole.title = p.omni ? `One request for the whole clip at 2 frames a second, so at most ${MAX_FRAMES / OMNI_FPS} s. The token budget is split over its frame pairs, so a longer clip means smaller frames; shorter windows give larger ones.`
+    : whole.dataset.denseTitle;
+  $("#video-sound-ctl").hidden = !p.omni;
+  $("#video-sound").disabled = V.running || !!V.track?.error;
+  $("#video-sound-ctl").title = V.track?.error ? `No sound: ${V.track.error}.` : "Send each window's stretch of the soundtrack with its frames (use_audio_in_video)";
   $("#video-run").disabled = !!unsupported || !V.ready || (!!p.error && !V.running);
   $("#video-overlap").disabled = V.running || p.whole;
   const chip = $("#video-hud-geom");
   chip.hidden = !V.ready;
   if (V.ready) chip.textContent = `${V.w}×${V.h}, ${fmtClock(V.duration, true)}`;
   paintGrid();
+}
+
+// What the cost line says about sound on clef-omni.
+function soundNote(n) {
+  if (!V.sound) return ", no sound";
+  if (V.track?.error) return `, no sound: ${V.track.error}`;
+  if (!V.track?.samples) return ", reading its sound";
+  return `, with its sound: ${fmtInt(audioTokens((n / OMNI_FPS) * AUDIO_RATE))} more tokens`;
 }
 
 function windowAt(t) {
@@ -250,7 +318,8 @@ function questionsChanged() {
   let key;
   try { key = JSON.stringify([buildRequest([], {}, "video"), snapshotConnection().revision]); }
   catch { key = JSON.stringify([questions, settings.model]); }
-  if (key !== V.qkey && V.windows.some((w) => w.state !== "idle")) {
+  // A run waiting on the soundtrack has every window still idle; it is stopped all the same.
+  if (key !== V.qkey && (V.running || V.windows.some((w) => w.state !== "idle"))) {
     // The lanes and cards belong to the questions; answers to other questions would be misdrawn.
     stop();
     for (const w of V.windows) Object.assign(w, { state: "idle", answers: null, error: null, server: null, total: null, tokens: null });
@@ -259,6 +328,9 @@ function questionsChanged() {
     $("#video-progress i").style.width = "0%";
   }
   V.qkey = key;
+  if (V.ready && isOmni(settings.model)) readTrack();
+  // To or from clef-omni the cut itself changes (frame count, sizes, captions).
+  if (!V.running && V.windows.length && V.windows[0].omni !== isOmni(settings.model)) replan();
   V.panel.setQuestions(questions, error);
   V.score.setQuestions(questions);
   refreshScore();
@@ -266,11 +338,15 @@ function questionsChanged() {
   refreshCost();
 }
 
+// cleffa rejects an Omni videos_kwargs without fps 2, and use_audio_in_video must say whether the
+// video carries a soundtrack.
 function windowRequest(win, budget, base) {
-  return { ...base,
-    videos: [{ frames: win.frames, fps: win.fps }],
-    media_kwargs: { videos_kwargs: { do_sample_frames: false, size: { shortest_edge: VIDEO_MIN_PIXELS, longest_edge: budget * PIXELS_PER_VIDEO_TOKEN } } },
-  };
+  const video = { frames: win.frames, fps: win.fps };
+  if (win.audio) video.audio = win.audio;
+  const kwargs = win.omni
+    ? { fps: OMNI_FPS, do_sample_frames: false, ...(win.audio ? { use_audio_in_video: true } : {}), size: videoSize(win.n, budget, true) }
+    : { do_sample_frames: false, size: videoSize(win.n, budget, false) };
+  return { ...base, videos: [video], media_kwargs: { videos_kwargs: kwargs } };
 }
 
 async function analyze() {
@@ -289,6 +365,13 @@ async function analyze() {
   setError("");
   refreshScore();
   syncPlayhead();
+  let track = null;
+  if (p.omni && V.sound) {
+    $("#video-status").textContent = "Reading the soundtrack…";
+    await readTrack();
+    if (gen !== V.gen) return;
+    track = V.track?.samples ?? null; // a clip without sound goes without; the cost line says so
+  }
   const started = performance.now();
   const inflight = new Set();
   for (const win of V.windows) {
@@ -296,7 +379,7 @@ async function analyze() {
     win.state = "grabbing";
     showWindow(V.current);
     try {
-      Object.assign(win, await grab(win, gen));
+      Object.assign(win, await grab(win, gen, track));
     } catch (e) {
       if (gen !== V.gen) break;
       fail(win, e.message);
@@ -320,7 +403,7 @@ async function analyze() {
 function stop() {
   if (!V.running) return;
   V.gen++; // the loop and every response still on its way see a newer generation and drop out
-  for (const w of V.windows) if (w.state === "grabbing" || w.state === "running") { w.state = "idle"; w.frames = null; }
+  for (const w of V.windows) if (w.state === "grabbing" || w.state === "running") { w.state = "idle"; w.frames = null; w.audio = null; }
   setRunning(false);
   refreshScore();
   showWindow(V.current);
@@ -332,15 +415,16 @@ function setRunning(run) {
   const b = $("#video-run");
   b.setAttribute("aria-pressed", String(run));
   b.replaceChildren(icon(run ? "stop" : "bolt"), el("span", { text: run ? "Stop" : "Analyze" }));
-  for (const c of [...$$("[data-win]", $("#video-win")), $("#video-fps"), $("#video-budget")]) c.disabled = run;
+  for (const c of [...$$("[data-win]", $("#video-win")), $("#video-fps"), $("#video-budget"), $("#video-sound")]) c.disabled = run;
   $("#video-stage").classList.toggle("busy", run);
   emit("activity", { mode: "video", running: run });
   refreshCost();
 }
 
 // Seeks the hidden copy of the clip to each sample time and keeps the frames as the request will
-// carry them (JPEG data URLs) plus a small thumbnail for the filmstrip.
-async function grab(win, gen) {
+// carry them (JPEG data URLs) plus a small thumbnail for the filmstrip, and, given the clip's
+// sound, the window's stretch of it as WAV (silence where the track does not reach).
+async function grab(win, gen, track = null) {
   const g = grabSize(), v = V.probe;
   const tw = Math.max(1, Math.round((g.w * THUMB_SIDE) / Math.max(g.w, g.h))), th = Math.max(1, Math.round((g.h * THUMB_SIDE) / Math.max(g.w, g.h)));
   V.canvas.width = g.w;
@@ -359,7 +443,9 @@ async function grab(win, gen) {
     frames.push(V.canvas.toDataURL("image/jpeg", GRAB_QUALITY));
     thumbs.push(V.thumb.toDataURL("image/jpeg", 0.7));
   }
-  return { frames, thumbs };
+  if (!track) return { frames, thumbs, audio: null };
+  const a = Math.round(win.a0 * AUDIO_RATE), b = a + Math.round((win.a1 - win.a0) * AUDIO_RATE);
+  return { frames, thumbs, audio: await fileToDataUrl(new Blob([encodeWav(track, a, b)], { type: "audio/wav" })) };
 }
 
 async function send(win, gen, base, connection) {
@@ -388,17 +474,16 @@ async function send(win, gen, base, connection) {
       r = await systemone(windowRequest(win, budget, base), { source, connection });
     }
     if (gen !== V.gen) return;
-    const g = grabSize();
     Object.assign(win, {
-      state: "done", answers: r.body.answers, server: r.server, total: r.total, tokens: r.tokens,
-      resized: videoResize(win.n, g.h, g.w, VIDEO_MIN_PIXELS, budget * PIXELS_PER_VIDEO_TOKEN),
+      state: "done", answers: r.body.answers, server: r.server, total: r.total, tokens: r.tokens, sound: !!win.audio,
+      resized: resizeFor(win.n, grabSize(), budget, win.omni),
     });
   } catch (e) {
     if (gen !== V.gen) return;
-    const hint = /sampled frames, above the limit/.test(e.message ?? "") ? " (here: lower the sampling rate or the window)" : "";
+    const hint = /sampled frames, above the limit/.test(e.message ?? "") ? (win.omni ? " (here: choose a shorter window)" : " (here: lower the sampling rate or the window)") : "";
     fail(win, describeError(e) + hint);
   } finally {
-    win.frames = null; // sent: only the thumbnails stay
+    win.frames = win.audio = null; // sent: only the thumbnails stay
   }
   refreshScore();
   showWindow(V.current);
@@ -476,7 +561,8 @@ function showWindow(k) {
 }
 
 // The engine writes each pair's mean source time with C's "%.1f", which rounds an exact tie (an
-// odd multiple of 0.25 s, common at 2 fps) to even, where toFixed rounds it up.
+// odd multiple of 0.25 s, common at 2 fps) to even, where toFixed rounds it up. Omni writes no
+// timestamp text; its positions carry the time.
 function stamp(x) {
   const q = x * 4;
   return Number.isInteger(q) && q % 2 !== 0 ? (roundHalfEven(x * 10) / 10).toFixed(1) : x.toFixed(1);
@@ -504,11 +590,11 @@ function renderStrip(win) {
     const b = Math.min(a + 1, win.n - 1);
     pairs.push(el("figure", { class: "pair" }, [
       el("div", { class: "pair-frames" }, [tile(a), b !== a ? tile(b) : ""]),
-      el("figcaption", {}, [el("code", { text: `<${stamp((a / win.fps + b / win.fps) / 2)} seconds>` }), el("span", { text: r ? `${r.w / FACTOR}×${r.h / FACTOR}` : "" })]),
+      el("figcaption", {}, [win.omni ? "" : el("code", { text: `<${stamp((a / win.fps + b / win.fps) / 2)} seconds>` }), el("span", { text: r ? `${r.w / FACTOR}×${r.h / FACTOR}` : "" })]),
     ]));
   }
   strip.replaceChildren(...pairs);
-  const state = { idle: "not analyzed", grabbing: "capturing", running: "in the engine", done: `${fmtInt(win.tokens)} tokens, ${fmtMs(win.server)}`, error: "failed" }[win.state];
+  const state = { idle: "not analyzed", grabbing: "capturing", running: "in the engine", done: `${fmtInt(win.tokens)} tokens${win.sound ? " with sound" : ""}, ${fmtMs(win.server)}`, error: "failed" }[win.state];
   $("#video-strip-note").textContent = `Window ${win.i + 1}: ${state}`;
   $("#video-strip-note").title = `${win.n} frames at ${win.fps.toFixed(2)} fps, ${r?.pairs ?? "?"} pairs of ${r ? `${r.w}×${r.h}` : "?"} px`;
 }

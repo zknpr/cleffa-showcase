@@ -42,7 +42,7 @@ function render() {
   let note = "";
   if (tab === "request") {
     shown = JSON.stringify(last.req, elide, 2);
-    note = "Image data elided. The download has the complete request.";
+    note = "Media data elided. The download has the complete request.";
   } else if (tab === "response") {
     shown = last.body ? JSON.stringify(last.body, null, 2) : last.text ?? "";
     note = last.backend === "hosted" ? "Workers AI's result field, unwrapped by the relay." : "";

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>cleffa demo</title>
-  <meta name="description" content="Explore Clef vision models with live camera, video, image batches and typed answers. Connect your own Cleffa, SystemOne or Cloudflare API.">
+  <meta name="description" content="Explore Clef models with live camera, video, image batches, audio and typed answers. Connect your own Cleffa, SystemOne or Cloudflare API.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -33,6 +33,7 @@
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5V4M7.5 8.5L12 4l4.5 4.5M4.5 15v3.5A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5V15"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11.5M7.5 11L12 15.5l4.5-4.5M4.5 20h15"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2H9l2 2h7.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 6.5v11M12 9v6M16 4.5v15M20 10v4"/></symbol>
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5L6 20"/></symbol>
     <symbol id="i-tokens" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9.33h16M4 14.66h16M9.33 4v16M14.66 4v16"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
@@ -79,7 +80,7 @@
       <div id="connection-hosted" class="connection-fields" hidden>
         <label>Account ID<input id="connection-account" type="text" maxlength="32" autocomplete="off" spellcheck="false"></label>
         <label><span>API token <small>with Workers AI access</small></span><input id="connection-cloudflare-token" type="password" autocomplete="off" spellcheck="false"></label>
-        <p class="pop-note">Billed to your account. Token and images pass through this site's relay and are not stored. No video.</p>
+        <p class="pop-note">Billed to your account. Token and media pass through this site's relay and are not stored. No video.</p>
         <p id="connection-proxy-note" class="pop-note" hidden>Leave both empty to use the companion's credentials.</p>
       </div>
       <div class="pop-row">
@@ -87,6 +88,7 @@
         <div class="seg" role="radiogroup" aria-label="Model">
           <button type="button" role="radio" data-model="clef-flash" aria-checked="true">clef-flash</button>
           <button type="button" role="radio" data-model="clef" aria-checked="false">clef</button>
+          <button type="button" role="radio" data-model="clef-omni" aria-checked="false">clef-omni</button>
         </div>
       </div>
       <div class="row"><button id="connection-connect" class="btn primary">Connect</button><button id="connection-disconnect" class="btn ghost">Disconnect</button></div>
@@ -196,6 +198,7 @@
                 <button type="button" role="radio" data-win="0" aria-checked="false" title="One request for the whole clip, at most 32 frames spread over it. The token budget is shared by every frame, so more frames means smaller ones; lower Sampling for larger frames.">Whole clip</button>
               </div>
               <label class="check" title="Start a window every half window and draw each over its central half: a change inside a window, like a subject turning around, is placed twice as precisely, for twice the requests"><input type="checkbox" id="video-overlap" checked><span>Overlap</span></label>
+              <label class="check" id="video-sound-ctl" hidden><input type="checkbox" id="video-sound" checked><span>Sound</span></label>
               <label class="ctl narrow">
                 <span class="ctl-top"><span>Sampling</span><output id="video-fps-out">2 fps</output></span>
                 <input type="range" id="video-fps" min="0.5" max="4" step="0.5" value="2">
@@ -317,7 +320,7 @@
       </div>
     </section>
 
-    <!-- Ask: one image, many schemas, keyed prefix-cache reuse through the proxy -->
+    <!-- Ask: one image, one audio clip or both, many schemas, keyed prefix-cache reuse through the proxy -->
     <section id="pane-ask" class="pane" role="tabpanel" aria-labelledby="tab-ask" hidden>
       <div class="workspace">
         <div class="main-col">
@@ -326,13 +329,22 @@
               <img id="ask-img" class="view" alt="" hidden>
               <canvas id="ask-grid" class="grid-overlay" hidden></canvas>
               <div class="hud hud-bl"><span class="hud-chip" id="ask-geom" hidden></span></div>
+              <div class="audio-box" id="ask-audio-box" hidden>
+                <canvas id="ask-wave" class="wave" aria-hidden="true"></canvas>
+                <div class="audio-row">
+                  <audio id="ask-player" controls preload="metadata" aria-label="The audio as sent: 16 kHz mono"></audio>
+                  <span class="hud-chip" id="ask-audio-geom"></span>
+                  <button class="icon-btn" id="ask-audio-remove" aria-label="Remove the audio" title="Remove the audio"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button>
+                </div>
+              </div>
               <div class="empty" id="ask-empty">
                 <div class="hero">
-                  <h1>One image, as many questions as you like.</h1>
+                  <h1>One image or sound, as many questions as you like.</h1>
                   <div class="cta">
                     <label class="btn primary lg"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg>Choose an image<input type="file" id="ask-file" accept="image/png,image/jpeg"></label>
+                    <label class="btn lg"><svg class="i" aria-hidden="true"><use href="#i-wave"/></svg>Choose audio<input type="file" id="ask-audio" accept="audio/*"></label>
                   </div>
-                  <p class="fine">or drop a PNG or JPEG here</p>
+                  <p class="fine">or drop a PNG, JPEG or audio file here. Audio needs clef-omni.</p>
                 </div>
               </div>
             </div>
@@ -344,7 +356,8 @@
               <label class="check" title="If the image is over the server's per-image token limit, resend once with the media_kwargs bound the engine suggests in its error"><input type="checkbox" id="ask-bounds" checked><span>Fit the token limit</span></label>
               <span class="grow"></span>
               <button class="btn ghost when-loaded" id="ask-grid-toggle" aria-pressed="false" disabled title="Overlay the image-token grid"><svg class="i" aria-hidden="true"><use href="#i-tokens"/></svg>Tokens</button>
-              <label class="btn ghost when-loaded"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Replace<input type="file" id="ask-file-2" accept="image/png,image/jpeg"></label>
+              <label class="btn ghost when-loaded" title="Choose another image"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg>Image<input type="file" id="ask-file-2" accept="image/png,image/jpeg"></label>
+              <label class="btn ghost when-loaded" title="Choose an audio clip (clef-omni)"><svg class="i" aria-hidden="true"><use href="#i-wave"/></svg>Audio<input type="file" id="ask-audio-2" accept="audio/*"></label>
             </div>
           </div>
           <p class="error" id="ask-error" role="alert"></p>

@@ -1,0 +1,1 @@
+{"model":"clef-omni","answers":{"sound_present":{"type":"noul","noul":0.8786},"sound_kind":{"type":"choice","choice":"steady_tone","confidence":0.9646,"probabilities":{"steady_tone":0.9646,"speech":0.007,"music":0.0108,"silence":0.0175}}},"usage":{"input_tokens":255,"output_tokens":0}}

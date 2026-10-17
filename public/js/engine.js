@@ -2,6 +2,7 @@ import { $, $$, fmtMs } from "./dom.js";
 import { settings, emit, on } from "./store.js";
 import { setRadio } from "./ui.js";
 import { configureConnection, connectionHealth, discoverCompanion, disconnect, snapshotConnection, proxyCredentialsAvailable } from "./connection.js";
+import { modelFromHealth } from "./models.js";
 
 let localModel = null, draftBackend = "local", draftModel = settings.model, checking = false;
 
@@ -51,7 +52,7 @@ async function pollHealth() {
     const h = await connectionHealth(connection);
     if (connection.revision !== snapshotConnection().revision) return;
     emit("health", h);
-    localModel = h.local?.ok && typeof h.local.model === "string" ? (/flash/i.test(h.local.model) ? "clef-flash" : "clef") : null;
+    localModel = h.local?.ok && typeof h.local.model === "string" ? modelFromHealth(h.local.model) : null;
     if (connection.backend === "local") {
       if (localModel) setModel(localModel, false);
       status(!!h.local?.ok, h.local?.ok ? `${settings.model} · local` : "clef-server offline",

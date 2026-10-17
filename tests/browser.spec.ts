@@ -15,6 +15,29 @@ function response(req: any) {
   };
 }
 
+const clip = (name: string) => new URL(`../fixtures/${name}`, import.meta.url).pathname;
+
+// The companion reports the GGUF's name; model-omni is what cleffa's converter writes for Omni.
+async function useOmni(page: Page) {
+  await page.route("**/api/health", route => route.fulfill({ json: {
+    local: { ok: true, model: "model-omni", ms: 1 }, hosted: true, clef: "http://127.0.0.1:8080",
+  } }));
+  await page.reload();
+  await expect(page.locator("#engine-name")).toContainText("clef-omni");
+}
+
+// A WAV data URL as cleffa reads it: the header it requires, the sample count and the RMS level.
+function wav(url: string) {
+  expect(url).toMatch(/^data:audio\/wav;base64,/);
+  const b = Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
+  expect([b.toString("ascii", 0, 4), b.toString("ascii", 8, 12), b.readUInt32LE(4) + 8]).toEqual(["RIFF", "WAVE", b.length]);
+  expect([b.readUInt16LE(20), b.readUInt16LE(22), b.readUInt32LE(24), b.readUInt16LE(34)]).toEqual([1, 1, 16000, 16]);
+  const samples = b.readUInt32LE(40) / 2;
+  let sum = 0;
+  for (let i = 0; i < samples; i++) sum += (b.readInt16LE(44 + 2 * i) / 32768) ** 2;
+  return { samples, rms: Math.sqrt(sum / samples) };
+}
+
 async function applySchema(page: Page, questions: any) {
   await page.locator('#pane-ask [data-action="edit"]').first().click();
   await page.locator("#editor-json-box summary").click();
@@ -314,4 +337,218 @@ test("public startup makes no local-network probes and disconnect clears credent
   await expect(page.locator("#connection-cloudflare-token")).toHaveValue("");
   const connection = await page.evaluate(async () => (await import("/js/connection.js")).snapshotConnection());
   expect(connection).toMatchObject({ enabled: false, token: "", session: "" });
+});
+
+test("clef-omni video windows send 2 fps frames with their stretch of the soundtrack", async ({ page }) => {
+  await useOmni(page);
+  const requests: any[] = [];
+  await page.route("**/api/systemone?**", route => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ json: response(route.request().postDataJSON()) });
+  });
+  await page.locator("#tab-video").click();
+  // 12 s: silence, then a 440 Hz tone at 0.25 from 6 s.
+  await page.locator("#video-file").setInputFiles(clip("test-clip-sound.webm"));
+  await expect(page.locator("#video-fps")).toBeDisabled();
+  await expect(page.locator("#video-fps-out")).toHaveText("2 fps");
+  await expect(page.locator("#video-cost")).toContainText("8 frames, 2 a second at 320×192, 240 tokens per window, with its sound: 52 more tokens");
+  // 4 s at 512 tokens bounds each frame at exactly Omni's own 131,072-pixel minimum: no warning.
+  await expect(page.locator("#video-cost")).not.toContainText("minimum");
+  await page.locator("#video-run").click();
+  await expect(page.locator("#video-status")).toContainText("5/5 windows");
+  expect(requests).toHaveLength(5);
+  const levels = requests.map(req => {
+    expect(req.model).toBe("clef-omni");
+    expect(req.videos[0].frames).toHaveLength(8);
+    expect(req.videos[0].fps).toBe(2);
+    expect(req.media_kwargs.videos_kwargs).toEqual({ fps: 2, do_sample_frames: false, use_audio_in_video: true, size: { shortest_edge: 4096, longest_edge: 131072 } });
+    const audio = wav(req.videos[0].audio);
+    expect(audio.samples).toBe(4 * 16000);
+    return audio.rms;
+  });
+  // Windows start every 2 s: 0-4 and 2-6 are silent, 6-10 and 8-12 carry the tone (RMS 0.177).
+  expect(levels[0]).toBeLessThan(0.01);
+  expect(levels[1]).toBeLessThan(0.01);
+  expect(levels[3]).toBeGreaterThan(0.15);
+  expect(levels[4]).toBeGreaterThan(0.15);
+  await expect(page.locator("#video-strip code")).toHaveCount(0); // Omni writes no "<t seconds>" text
+  await page.locator("#video-sound").uncheck();
+  await expect(page.locator("#video-cost")).toContainText("no sound");
+  await page.locator("#video-run").click();
+  await expect.poll(() => requests.length).toBe(10);
+  await expect(page.locator("#video-run")).toHaveAttribute("aria-pressed", "false");
+  for (const req of requests.slice(5)) {
+    expect(req.videos[0]).not.toHaveProperty("audio");
+    expect(req.media_kwargs.videos_kwargs).toEqual({ fps: 2, do_sample_frames: false, size: { shortest_edge: 4096, longest_edge: 131072 } });
+  }
+});
+
+test("clef-omni video of a clip without sound sends frames only, and a whole 12 s clip is one 24-frame request", async ({ page }) => {
+  await useOmni(page);
+  const requests: any[] = [];
+  await page.route("**/api/systemone?**", route => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ json: response(route.request().postDataJSON()) });
+  });
+  await page.locator("#tab-video").click();
+  await page.locator("#video-file").setInputFiles(clip("test-clip.webm"));
+  await expect(page.locator("#video-cost")).toContainText("no sound: the clip has no sound the browser can decode");
+  await expect(page.locator("#video-sound")).toBeDisabled();
+  await page.locator("#video-run").click();
+  await expect(page.locator("#video-status")).toContainText("5/5 windows");
+  for (const req of requests) {
+    expect(req.videos[0]).toEqual({ frames: expect.any(Array), fps: 2 });
+    expect(req.media_kwargs.videos_kwargs).not.toHaveProperty("use_audio_in_video");
+  }
+  await expect(page.locator('[data-win="0"]')).toHaveAttribute("title", /at most 16 s/);
+  await page.locator('[data-win="0"]').click();
+  // 512 tokens over 12 frame pairs bounds each frame at 43,008 pixels, under Omni's own minimum.
+  await expect(page.locator("#video-cost")).toContainText("under clef-omni's own minimum of 131,072 pixels");
+  await page.locator("#video-run").click();
+  await expect(page.locator("#video-status")).toContainText("1/1 windows");
+  expect(requests.at(-1).videos[0].frames).toHaveLength(24);
+  expect(requests.at(-1).media_kwargs.videos_kwargs.size.longest_edge).toBe(Math.floor(512 / 12) * 1024);
+});
+
+test("clef-omni: editing the questions while the soundtrack decodes stops the run before it sends", async ({ page }) => {
+  // Every decode waits until the test releases it: the run sits in "Reading the soundtrack…".
+  await page.addInitScript(() => {
+    const decode = BaseAudioContext.prototype.decodeAudioData;
+    const gate = new Promise(r => (window as any).releaseDecode = r);
+    BaseAudioContext.prototype.decodeAudioData = async function (this: BaseAudioContext, data: ArrayBuffer) { await gate; return decode.call(this, data); };
+  });
+  await useOmni(page);
+  let seen = 0;
+  await page.route("**/api/systemone?**", route => { seen++; return route.fulfill({ json: response(route.request().postDataJSON()) }); });
+  await page.locator("#tab-video").click();
+  await page.locator("#video-file").setInputFiles(clip("test-clip-sound.webm"));
+  await page.locator("#video-run").click();
+  await expect(page.locator("#video-status")).toContainText("Reading the soundtrack");
+  await page.locator('#pane-video [data-action="edit"]').click();
+  await page.locator("#editor-state").fill("A different task about this clip.");
+  await expect(page.locator("#video-run")).toHaveAttribute("aria-pressed", "false");
+  await page.evaluate(() => (window as any).releaseDecode());
+  await expect(page.locator("#video-cost")).toContainText("with its sound");
+  await page.waitForTimeout(500);
+  expect(seen).toBe(0);
+  await expect(page.locator("#video-decisions .dcard:not(.pending)")).toHaveCount(0);
+});
+
+test("switching to clef-omni re-plans the idle filmstrip", async ({ page }) => {
+  await page.locator("#tab-video").click();
+  await page.locator("#video-file").setInputFiles(clip("test-clip-sound.webm"));
+  await expect(page.locator("#video-strip code").first()).toBeVisible(); // dense: "<t seconds>" captions
+  // clef-server restarted with the Omni GGUF; the page's next health check (every 5 s) sees it.
+  await page.route("**/api/health", route => route.fulfill({ json: {
+    local: { ok: true, model: "model-omni", ms: 1 }, hosted: true, clef: "http://127.0.0.1:8080",
+  } }));
+  await expect(page.locator("#engine-name")).toContainText("clef-omni", { timeout: 10_000 });
+  await expect(page.locator("#video-strip code")).toHaveCount(0);
+});
+
+test("a frame-limit error on clef-omni points at the window, not the locked sampling", async ({ page }) => {
+  await useOmni(page);
+  await page.route("**/api/systemone?**", route => route.fulfill({ status: 400, json: {
+    error: "video has 8 sampled frames, above the limit of 4 or its source count; lower videos_kwargs.fps/num_frames",
+  } }));
+  await page.locator("#tab-video").click();
+  await page.locator("#video-file").setInputFiles(clip("test-clip-sound.webm"));
+  await page.locator("#video-run").click();
+  await expect(page.locator("#video-error")).toContainText("(here: choose a shorter window)");
+});
+
+test("Ask takes a dropped video file's sound as audio, not as an image", async ({ page }) => {
+  await useOmni(page);
+  await page.locator("#tab-ask").click();
+  // Chromium types .webm as video/webm, audio-only recordings included.
+  const bytes = readFileSync(clip("test-clip-sound.webm")).toString("base64");
+  await page.evaluate((b64) => {
+    const file = new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], "voice.webm", { type: "video/webm" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    document.querySelector("#ask-stage")!.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, bytes);
+  await expect(page.locator("#ask-audio-geom")).toContainText("16 kHz mono");
+  await expect(page.locator("#ask-error")).toHaveText("");
+});
+
+test("Ask refuses audio for a model that takes none, before sending", async ({ page }) => {
+  let sent = 0;
+  await page.route("**/api/systemone?**", route => { sent++; return route.fulfill({ json: response(route.request().postDataJSON()) }); });
+  await page.locator("#tab-ask").click();
+  await page.locator("#ask-audio").setInputFiles(clip("tone.ogg"));
+  await expect(page.locator("#ask-audio-geom")).toContainText("needs clef-omni");
+  await page.locator("#ask-go").click();
+  await expect(page.locator("#ask-error")).toContainText("clef-flash takes no audio");
+  expect(sent).toBe(0);
+});
+
+test("Ask sends audio to clef-omni alone or beside an image, without a cache key", async ({ page }) => {
+  await useOmni(page);
+  const requests: any[] = [], headers: Record<string, string>[] = [];
+  await page.route("**/api/systemone?**", route => {
+    requests.push(route.request().postDataJSON());
+    headers.push(route.request().headers());
+    return route.fulfill({ json: response(route.request().postDataJSON()) });
+  });
+  await page.locator("#tab-ask").click();
+  await expect(page.locator("#ask-cache")).toBeDisabled();
+  // 2 s of a 440 Hz tone at 0.25 on both channels: mixed to mono it keeps its level.
+  await page.locator("#ask-audio").setInputFiles(clip("tone.ogg"));
+  await expect(page.locator("#ask-audio-geom")).toContainText("16 kHz mono, 26 audio tokens");
+  await expect(page.locator("#ask-empty")).toBeHidden();
+  await page.locator("#ask-go").click();
+  await expect(page.locator(".ask-item")).toHaveCount(1);
+  expect(requests[0]).not.toHaveProperty("images");
+  const audio = wav(requests[0].audio[0]);
+  expect(Math.abs(audio.samples - 32000)).toBeLessThan(400);
+  expect(Math.abs(audio.rms - 0.25 / Math.SQRT2)).toBeLessThan(0.02);
+  expect(headers[0]["x-showcase-cache"]).toBeUndefined();
+
+  // A 2048x1536 photo is 3,072 tokens on the dense models; Omni bounds it at 1,048,576 pixels.
+  const big = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 2048; c.height = 1536;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#468"; ctx.fillRect(0, 0, 2048, 1536);
+    return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+  });
+  await page.locator("#ask-file-2").setInputFiles({ name: "big.jpg", mimeType: "image/jpeg", buffer: Buffer.from(big, "base64") });
+  await expect(page.locator("#ask-geom")).toContainText("2048×1536 → 1152×864, 972 image tokens");
+  await expect(page.locator(".ask-item")).toHaveCount(0);
+  await expect(page.locator("#ask-empty")).toBeHidden();
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.locator("#ask-go").click();
+  await expect(page.locator(".ask-item")).toHaveCount(1);
+  expect(requests[1].images).toHaveLength(1);
+  expect(requests[1].audio).toEqual(requests[0].audio);
+
+  await page.locator("#ask-audio-remove").click();
+  await expect(page.locator("#ask-audio-box")).toBeHidden();
+  await page.locator("#ask-go").click();
+  await expect(page.locator(".ask-item")).toHaveCount(1);
+  expect(requests[2]).not.toHaveProperty("audio");
+  expect(requests[2].images).toEqual(requests[1].images);
+});
+
+test("Cloudflare clef-omni takes audio through the relay unchanged", async ({ page }) => {
+  await page.locator("#engine-pill").click();
+  await page.locator('[data-backend="hosted"]').click();
+  await page.locator("#connection-account").fill("a".repeat(32));
+  await page.locator("#connection-cloudflare-token").fill("visitor-cloudflare-token");
+  await page.locator('[data-model="clef-omni"]').click();
+  await page.locator("#connection-connect").click();
+  await page.locator("#engine-pill").click();
+  await expect(page.locator("#engine-name")).toContainText("clef-omni · Cloudflare");
+  let req: any = null;
+  await page.route("**/api/cloudflare", route => { req = route.request().postDataJSON(); return route.fulfill({ json: response(req) }); });
+  await page.locator("#tab-ask").click();
+  await page.locator("#ask-audio").setInputFiles(clip("tone.ogg"));
+  await page.locator("#ask-go").click();
+  await expect(page.locator(".ask-item")).toHaveCount(1);
+  expect(req.model).toBe("clef-omni");
+  expect(wav(req.audio[0]).samples).toBeGreaterThan(31000);
 });

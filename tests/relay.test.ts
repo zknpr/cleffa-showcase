@@ -67,3 +67,18 @@ test("relay bounds streamed bodies and fails explicitly on upstream errors", asy
   expect(redirected.status).toBe(502);
   expect(await redirected.text()).toContain("unexpected redirect");
 });
+
+test("relay forwards clef-omni, audio included, to its fixed endpoint", async () => {
+  const mod = await import(modulePath).catch(() => null);
+  expect(mod?.relayCloudflare).toBeFunction();
+  const body = '{"model":"clef-omni","audio":["data:audio/wav;base64,UklGRg=="],"questions":{"q":{"type":"noul"}}}';
+  let url = "", sent = "";
+  const result = await mod.relayCloudflare(request({}, body), async (u: string, init: RequestInit) => {
+    url = u;
+    sent = new TextDecoder().decode(init.body as ArrayBuffer);
+    return Response.json({ success: true, result: { answers: { q: { type: "noul", noul: 0.4 } } } });
+  });
+  expect(result.status).toBe(200);
+  expect(url).toBe(`https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/ai/run/@cf/cloudflare/clef-omni`);
+  expect(sent).toBe(body);
+});

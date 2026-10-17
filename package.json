@@ -21,7 +21,7 @@
   },
   "cleffa": {
     "repository": "https://github.com/zknpr/cleffa",
-    "commit": "4b9e6e1"
+    "commit": "24fc91e"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261008.1",

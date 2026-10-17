@@ -2,7 +2,7 @@
 // per request; this module has no visitor state and never chooses an arbitrary upstream URL.
 export const MAX_BODY = 10 * 1024 * 1024;
 export const INFERENCE_TIMEOUT_MS = 120_000;
-const MODELS = new Set(["clef", "clef-flash"]);
+const MODELS = new Set(["clef", "clef-flash", "clef-omni"]);
 
 export function jsonResponse(status: number, body: unknown, headers?: HeadersInit): Response {
   const h = new Headers(headers);
@@ -52,7 +52,7 @@ export async function relayCloudflare(req: Request, upstream: Fetcher = fetch): 
   return forwardToCloudflare(req, upstream);
 }
 
-// Forwards a SystemOne request to one of the two fixed Clef endpoints with the credentials it
+// Forwards a SystemOne request to one of the three fixed Clef endpoints with the credentials it
 // carries. Callers decide who may send it: the relay above, or the companion's own environment
 // credentials, which never come from a browser.
 export async function forwardToCloudflare(req: Request, upstream: Fetcher = fetch): Promise<Response> {
@@ -69,7 +69,7 @@ export async function forwardToCloudflare(req: Request, upstream: Fetcher = fetc
   } catch (e) {
     return jsonResponse(e instanceof RangeError ? 413 : 400, { error: e instanceof RangeError ? "request exceeds 10 MiB" : "body must be JSON" });
   }
-  if (typeof model !== "string" || !MODELS.has(model)) return jsonResponse(400, { error: "model must be clef or clef-flash" });
+  if (typeof model !== "string" || !MODELS.has(model)) return jsonResponse(400, { error: "model must be clef, clef-flash or clef-omni" });
   const t0 = performance.now();
   const signal = AbortSignal.any([req.signal, AbortSignal.timeout(INFERENCE_TIMEOUT_MS)]);
   try {

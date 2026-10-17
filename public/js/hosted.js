@@ -3,7 +3,10 @@ import { smartResize, MIN_PIXELS } from "./resize.js";
 
 // Workers AI currently accepts images but rejects videos and media_kwargs. Apply the requested
 // image budget before uploading, and expose these actual bytes in the inspector. Browser JPEG
-// resampling is not a claim of byte parity with Cleffa's reference preprocessing.
+// resampling is not a claim of byte parity with Cleffa's reference preprocessing. Audio for
+// clef-omni goes as it is, as WAV data URLs; cleffa's hosted comparison sent float32 WAV, so hosted
+// PCM16 is untested. Video stays refused for clef-omni too: its hosted video was checked with MOV
+// uploads, not frame arrays.
 export async function prepareHostedRequest(req) {
   if (req.videos?.length) throw new Error("Cloudflare Workers AI does not accept video input. Connect local Cleffa or a video-capable SystemOne API.");
   const maxPixels = Math.max(128 * 1024, req.media_kwargs?.max_pixels ?? 1024 * 1024);

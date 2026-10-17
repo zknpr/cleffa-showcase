@@ -53,3 +53,27 @@ export function videoResize(frames, h, w, minPixels = VIDEO_MIN_PIXELS, maxPixel
   const pairs = padded / 2, perPair = (hb / FACTOR) * (wb / FACTOR);
   return { h: hb, w: wb, pairs, perPair, tokens: pairs * perPair };
 }
+
+// Clef-Omni's video processor (Qwen2VL's, in cleffa clef_smart_resize on one frame) bounds each
+// frame's area on its own, so `size` is per frame and a window's cost grows with its frame count.
+// A token is still a 32x32 block over a pair of frames, 1,024 pixels of the per-frame bound.
+export const OMNI_VIDEO_MIN_PIXELS = 131072, OMNI_VIDEO_MAX_PIXELS = 786432;
+
+export function omniVideoResize(frames, h, w, minPixels = OMNI_VIDEO_MIN_PIXELS, maxPixels = OMNI_VIDEO_MAX_PIXELS) {
+  if (!(frames >= 1) || !(h >= FACTOR && w >= FACTOR)) return null;
+  const r = smartResize(h, w, minPixels, maxPixels);
+  if (!r) return null;
+  const pairs = Math.ceil(frames / 2);
+  return { h: r.h, w: r.w, pairs, perPair: r.tokens, tokens: pairs * r.tokens };
+}
+
+// videos_kwargs.size for a window of `frames` frames at `budget` tokens. Dense models bound the
+// window's pixels together; Omni bounds each frame, so its bound is the budget's share per frame
+// pair. The floor stays the dense processor's 4,096 pixels rather than Omni's own 131,072:
+// upscaling a small clip adds tokens, not detail, and from the larger floor smart_resize's ceil
+// could overshoot the share.
+export function videoSize(frames, budget, omni) {
+  if (!omni) return { shortest_edge: VIDEO_MIN_PIXELS, longest_edge: budget * PIXELS_PER_VIDEO_TOKEN };
+  const longest = Math.max(1, Math.floor(budget / Math.ceil(frames / 2))) * FACTOR * FACTOR;
+  return { shortest_edge: Math.min(VIDEO_MIN_PIXELS, longest), longest_edge: longest };
+}
